@@ -9,11 +9,11 @@ Serial port:
     set environment variable USB_PORT
 
 Usage:
-    python usb_protocol.py get <param_id>          # Get parameter value
-    python usb_protocol.py set <param_id> <value>  # Set parameter value
-    python usb_protocol.py version                 # Get firmware version
-    python usb_protocol.py state                   # Get device state (voltage, RPM, engine)
-    python usb_protocol.py reboot                  # Reboot device
+    python cli.py get [param_id]          # Get parameter value (all if no ID)
+    python cli.py set <param_id> <value>  # Set parameter value
+    python cli.py version                 # Get firmware version
+    python cli.py state                   # Get device state (voltage, RPM, engine)
+    python cli.py reboot                  # Reboot device
 """
 
 import usb_protocol as u

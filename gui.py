@@ -172,7 +172,7 @@ class MowerGUI:
             self.status[s].config(state="readonly")
 
         self.read_ok = True
-        self.log("Params read succesfull")
+        self.log("Params read successful")
 
     def write(self):
         if self.client is None:
@@ -194,13 +194,14 @@ class MowerGUI:
                 self.disconnect()
                 return
 
-        self.log("Params write succesfull")
+        self.log("Params write successful")
 
 def main():
     root = tk.Tk()
     app = MowerGUI(root)
 
     def on_closing():
+        app.disconnect()
         root.destroy()
 
     root.protocol("WM_DELETE_WINDOW", on_closing)

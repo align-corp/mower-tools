@@ -131,7 +131,7 @@ class UsbProtocolClient:
         Returns:
             Parameter value (int32_t)
         """
-        if param_id < 0 or param_id > len(PARAM_NAMES):
+        if param_id < 0 or param_id >= len(PARAM_NAMES):
             raise ValueError(f"Invalid parameter ID: {param_id}")
 
         # Send request
@@ -169,7 +169,7 @@ class UsbProtocolClient:
         Returns:
             True on success
         """
-        if param_id < 0 or param_id > len(PARAM_NAMES):
+        if param_id < 0 or param_id >= len(PARAM_NAMES):
             raise ValueError(f"Invalid parameter ID: {param_id}")
 
         # Build payload: [PARAM_ID] [VALUE_0] [VALUE_1] [VALUE_2] [VALUE_3]

@@ -90,7 +90,7 @@ class MowerGUI:
             for p in ports:
                 if "Mower" in p.description or "2A58" in p.hwid:
                     port_to_select = p
-                    self.log(f"Mower controller found, port {port_to_select}")
+                    self.log(f"Mower controller found\nPort: {port_to_select}")
                     break
             self.port_combo.set(port_to_select.device)
 
@@ -188,6 +188,11 @@ class MowerGUI:
                 continue
             try:
                 value = int(self.params[i].get())
+            except Exception as e:
+                self.log(f"Wrong input: {e}")
+                return
+
+            try:
                 self.client.set_param(i, value)
             except Exception as e:
                 self.log(f"Param write error: {e}")

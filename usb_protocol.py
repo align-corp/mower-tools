@@ -27,15 +27,17 @@ USB_ERR_INVALID_LENGTH = 0x05
 
 # Parameter names for reference
 PARAM_NAMES = {
-    0: "Blade encoder min",
-    1: "Blade encoder max",
-    2: "Blade encoder now",
-    3: "Blade hysteresis start",
-    4: "Blade hysteresis stop",
-    5: "Blade setting bitmask",
-    6: "Time engine [min]",
-    7: "Time mower [min]",
-    8: "Engine Choke CH"
+    0: "Time engine [min]",
+    1: "Time mower [min]",
+    2: "Engine choke CH",
+    3: "Engine setting bitmask",
+    4: "Blade encoder min",
+    5: "Blade encoder max",
+    6: "Blade encoder now",
+    7: "Blade hysteresis start",
+    8: "Blade hysteresis stop",
+    9: "Blade middle per mille",
+    10: "Blade setting bitmask",
 }
 
 STATUS_NAMES = {

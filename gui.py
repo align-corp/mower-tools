@@ -46,16 +46,12 @@ class MowerGUI:
         self.write_btn.grid(row=0, column=2, padx=10, pady=2)
 
         # Params frame
-        param_frame = ttk.Frame(main_frame)
-        param_frame.grid(row=2, column=0, pady=5)
-        self.param_label = ttk.Label(param_frame, text="Parameters", style="Title.TLabel")
+        self.param_frame = ttk.Frame(main_frame)
+        self.param_frame.grid(row=2, column=0, pady=5)
+        self.param_label = ttk.Label(self.param_frame, text="Parameters", style="Title.TLabel")
         self.param_label.grid(columnspan=2, pady=5)
         self.params = {}
-        for i, name  in u.PARAM_NAMES.items():
-            ttk.Label(param_frame, text=name).grid(row=i+1, sticky=tk.W)
-            state = "readonly" if self.is_readonly(i) else "normal"
-            self.params[i] = ttk.Entry(param_frame, width=10, state=state)
-            self.params[i].grid(row=i+1, column=1, padx=5)
+        self.current_param_names = {}
             
         # Status frame
         status_frame = ttk.Frame(main_frame)
@@ -98,6 +94,24 @@ class MowerGUI:
         self.log_text.insert(tk.END, f"{message}\n")
         self.log_text.see(tk.END)
 
+    def _build_params(self, param_names):
+        """Build parameter widgets based on param names dict"""
+        self._clear_params()
+        self.current_param_names = param_names
+        for i, name in param_names.items():
+            ttk.Label(self.param_frame, text=name).grid(row=i+1, sticky=tk.W)
+            state = "readonly" if self.is_readonly(i) else "normal"
+            self.params[i] = ttk.Entry(self.param_frame, width=10, state=state)
+            self.params[i].grid(row=i+1, column=1, padx=5)
+
+    def _clear_params(self):
+        """Remove all parameter widgets"""
+        for widget in self.param_frame.winfo_children():
+            if widget != self.param_label:
+                widget.destroy()
+        self.params = {}
+        self.current_param_names = {}
+
     def connect(self):
         try:
             self.client = u.UsbProtocolClient(self.port_combo.get())
@@ -108,6 +122,7 @@ class MowerGUI:
         try:
             major, minor = self.client.get_version()
             self.log(f"Version {major}.{minor}")
+            self._build_params(self.client.param_names)
         except Exception as e:
             self.log(f"Controller is not answering: {e}")
             self.client.close()
@@ -125,12 +140,7 @@ class MowerGUI:
         self.log("Disconnected")
         self.read_ok = False
 
-        # Reset parameters
-        for p in u.PARAM_NAMES:
-            self.params[p].config(state="normal")
-            self.params[p].delete(0, tk.END)
-            if self.is_readonly(p):
-                self.params[p].config(state="readonly")
+        self._clear_params()
 
         # Reset status
         for s in u.STATUS_NAMES:
@@ -139,14 +149,14 @@ class MowerGUI:
             self.status[s].config(state="readonly")
 
     def is_readonly(self, param_id):
-        return "Time" in u.PARAM_NAMES.get(param_id, "")
+        return "Time" in self.current_param_names.get(param_id, "")
 
     def read(self):
         if self.client is None:
             self.log("Connect first")
             return
 
-        for p in u.PARAM_NAMES:
+        for p in self.current_param_names:
             try:
                 value = self.client.get_param(p)
             except Exception as e:
@@ -183,7 +193,7 @@ class MowerGUI:
             self.log("Read parameters first")
             return
 
-        for i in u.PARAM_NAMES:
+        for i in self.current_param_names:
             if self.is_readonly(i):
                 continue
             try:

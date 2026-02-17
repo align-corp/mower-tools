@@ -14,6 +14,9 @@ Usage:
     python cli.py version                 # Get firmware version
     python cli.py state                   # Get device state (voltage, RPM, engine)
     python cli.py reboot                  # Reboot device
+
+Options:
+    --fram <0|1>                          # Select FRAM revision (default: latest)
 """
 
 import usb_protocol as u
@@ -25,14 +28,22 @@ PORT = '/dev/tty.usbmodem14101'  # Common for macOS
 
 def main():
     """Command-line interface"""
-    if len(sys.argv) < 2:
+    # Parse optional --fram flag
+    args = sys.argv[:]
+    fram_revision = u.LATEST_REVISION
+    if '--fram' in args:
+        idx = args.index('--fram')
+        fram_revision = int(args[idx + 1])
+        del args[idx:idx + 2]
+
+    if len(args) < 2:
         print(__doc__)
-        print("\nParameter IDs:")
-        for pid, name in u.PARAM_NAMES.items():
+        print(f"\nParameter IDs (FRAM revision {fram_revision}):")
+        for pid, name in u.PARAM_REVISIONS[fram_revision].items():
             print(f"  {pid}: {name}")
         sys.exit(1)
 
-    command = sys.argv[1].lower()
+    command = args[1].lower()
 
     # Allow port override via environment variable
     import os
@@ -40,29 +51,30 @@ def main():
 
     try:
         client = u.UsbProtocolClient(port)
+        client.param_revision = fram_revision
 
         if command == 'get':
-            if len(sys.argv) < 3:
-                for p in u.PARAM_NAMES:
+            if len(args) < 3:
+                for p in client.param_names:
                     value = client.get_param(p)
-                    param_name = u.PARAM_NAMES.get(p, f"PARAM_{p}")
+                    param_name = client.param_names.get(p, f"PARAM_{p}")
                     print(f"{param_name} (ID {p}) = {value}")
                     time.sleep(0.1)
             else:
-                param_id = int(sys.argv[2])
+                param_id = int(args[2])
                 value = client.get_param(param_id)
-                param_name = u.PARAM_NAMES.get(param_id, f"PARAM_{param_id}")
+                param_name = client.param_names.get(param_id, f"PARAM_{param_id}")
                 print(f"{param_name} (ID {param_id}) = {value}")
 
         elif command == 'set':
-            if len(sys.argv) < 4:
-                print("Usage: python usb_protocol.py set <param_id> <value>")
+            if len(args) < 4:
+                print("Usage: python cli.py set <param_id> <value>")
                 sys.exit(1)
 
-            param_id = int(sys.argv[2])
-            value = int(sys.argv[3])
+            param_id = int(args[2])
+            value = int(args[3])
             client.set_param(param_id, value)
-            param_name = u.PARAM_NAMES.get(param_id, f"PARAM_{param_id}")
+            param_name = client.param_names.get(param_id, f"PARAM_{param_id}")
             print(f"{param_name} (ID {param_id}) set to {value}")
 
         elif command == 'version':

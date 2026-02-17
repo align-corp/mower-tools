@@ -26,7 +26,8 @@ USB_ERR_PARAM_ACCESS = 0x04
 USB_ERR_INVALID_LENGTH = 0x05
 
 # Parameter names for reference
-PARAM_NAMES = {
+# Version >= 0.3
+PARAM_NAMES_V1 = {
     0: "Time engine [min]",
     1: "Time mower [min]",
     2: "Engine choke CH",
@@ -39,6 +40,30 @@ PARAM_NAMES = {
     9: "Blade middle per mille",
     10: "Blade setting bitmask",
 }
+
+# Version <= 0.2
+PARAM_NAMES_V0 = {
+    0: "Blade encoder min",
+    1: "Blade encoder max",
+    2: "Blade encoder now",
+    3: "Blade hysteresis start",
+    4: "Blade hysteresis stop",
+    5: "Blade setting bitmask",
+    6: "Time engine [min]",
+    7: "Time mower [min]",
+    8: "Engine Choke CH",
+}
+
+PARAM_REVISIONS = {0: PARAM_NAMES_V0, 1: PARAM_NAMES_V1}
+LATEST_REVISION = 1
+
+
+def revision_from_version(major, minor):
+    """Determine FRAM revision from firmware version"""
+    if major == 0 and minor <= 2:
+        return 0
+    return 1
+
 
 STATUS_NAMES = {
     0: "Voltage",
@@ -72,6 +97,11 @@ class UsbProtocolClient:
         """
         self.ser = serial.Serial(port, baudrate, timeout=timeout)
         time.sleep(0.1)  # Wait for connection to stabilize
+        self.param_revision = LATEST_REVISION
+
+    @property
+    def param_names(self):
+        return PARAM_REVISIONS[self.param_revision]
 
     def _calculate_checksum(self, cmd, payload):
         """Calculate protocol checksum (ABUS-style)"""
@@ -133,7 +163,7 @@ class UsbProtocolClient:
         Returns:
             Parameter value (int32_t)
         """
-        if param_id < 0 or param_id >= len(PARAM_NAMES):
+        if param_id < 0 or param_id >= len(self.param_names):
             raise ValueError(f"Invalid parameter ID: {param_id}")
 
         # Send request
@@ -171,7 +201,7 @@ class UsbProtocolClient:
         Returns:
             True on success
         """
-        if param_id < 0 or param_id >= len(PARAM_NAMES):
+        if param_id < 0 or param_id >= len(self.param_names):
             raise ValueError(f"Invalid parameter ID: {param_id}")
 
         # Build payload: [PARAM_ID] [VALUE_0] [VALUE_1] [VALUE_2] [VALUE_3]
@@ -220,6 +250,7 @@ class UsbProtocolClient:
             raise RuntimeError(f"Invalid response: cmd={cmd:02X}, len={len(payload)}")
 
         major, minor = payload[0], payload[1]
+        self.param_revision = revision_from_version(major, minor)
         return (major, minor)
 
     def get_state(self):

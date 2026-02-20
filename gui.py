@@ -1,11 +1,38 @@
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk, filedialog
+import threading
+import queue
 import serial.tools.list_ports
 import usb_protocol as u
+import bootloader_uploader as bl
 
 VERSION = 0.1
 
-# Parameter names for reference
+class _QueueWriter:
+    """File-like object that captures print output into a queue for GUI display."""
+    def __init__(self, q):
+        self._queue = q
+        self._line = ""
+        self._cr = False
+
+    def write(self, text):
+        for ch in text:
+            if ch == '\r':
+                self._cr = True
+                self._line = ""
+            elif ch == '\n':
+                self._queue.put((self._line, self._cr))
+                self._line = ""
+                self._cr = False
+            else:
+                self._line += ch
+
+    def flush(self):
+        if self._line:
+            self._queue.put((self._line, self._cr))
+            self._line = ""
+
+
 class MowerGUI:
     def __init__(self, root):
         self.client = None
@@ -64,9 +91,25 @@ class MowerGUI:
             self.status[i] = ttk.Entry(status_frame, width=10, state="readonly")
             self.status[i].grid(row=i+1, column=1, padx=5)
 
+        # Firmware upgrade frame
+        fw_frame = ttk.Frame(main_frame)
+        fw_frame.grid(row=4, column=0, pady=5)
+        ttk.Label(fw_frame, text="Firmware Upgrade", style="Title.TLabel").grid(
+            row=0, columnspan=3, pady=5
+        )
+        self.fw_path_var = tk.StringVar()
+        ttk.Entry(fw_frame, textvariable=self.fw_path_var, width=30).grid(
+            row=1, column=0, padx=(0, 5)
+        )
+        ttk.Button(fw_frame, text="Browse", command=self.browse_firmware).grid(
+            row=1, column=1, padx=(0, 5)
+        )
+        self.upgrade_btn = ttk.Button(fw_frame, text="Upgrade", command=self.start_upgrade)
+        self.upgrade_btn.grid(row=2, columnspan=2)
+
         # Log frame
         self.log_frame = ttk.LabelFrame(main_frame, text="Log")
-        self.log_frame.grid(row=4, pady=5)
+        self.log_frame.grid(row=5, pady=5)
         self.log_text = tk.Text(self.log_frame, height=10, width=50)
         scrollbar = ttk.Scrollbar(self.log_frame, orient=tk.VERTICAL, command=self.log_text.yview)
         self.log_text.configure(yscrollcommand=scrollbar.set)
@@ -210,6 +253,74 @@ class MowerGUI:
                 return
 
         self.log("Params write successful")
+
+    def browse_firmware(self):
+        path = filedialog.askopenfilename(
+            filetypes=[("Binary files", "*.bin"), ("All files", "*.*")]
+        )
+        if path:
+            self.fw_path_var.set(path)
+
+    def start_upgrade(self):
+        fw_path = self.fw_path_var.get()
+        if not fw_path:
+            self.log("Select a firmware file first")
+            return
+
+        port = self.port_combo.get()
+        if not port:
+            self.log("Select a serial port first")
+            return
+
+        if self.client:
+            self.disconnect()
+
+        self.upgrade_btn.config(state="disabled")
+        self._upgrade_queue = queue.Queue()
+        self._last_was_progress = False
+
+        thread = threading.Thread(
+            target=self._upgrade_worker, args=(port, fw_path), daemon=True
+        )
+        thread.start()
+        self._poll_upgrade()
+
+    def _upgrade_worker(self, port, fw_path):
+        import sys
+        old_stdout = sys.stdout
+        sys.stdout = _QueueWriter(self._upgrade_queue)
+        try:
+            uploader = bl.BootloaderUploader(port)
+            if not uploader.connect():
+                return
+            try:
+                uploader.upload_firmware(fw_path)
+            finally:
+                uploader.disconnect()
+        except Exception as e:
+            print(f"Upgrade error: {e}")
+        finally:
+            sys.stdout = old_stdout
+            self._upgrade_queue.put(None)
+
+    def _poll_upgrade(self):
+        try:
+            while True:
+                msg = self._upgrade_queue.get_nowait()
+                if msg is None:
+                    self.upgrade_btn.config(state="normal")
+                    return
+                text, is_progress = msg
+                if not text:
+                    continue
+                if is_progress and self._last_was_progress:
+                    self.log_text.delete("end-2l", "end-1c")
+                self.log(text)
+                self._last_was_progress = is_progress
+        except queue.Empty:
+            pass
+        self.root.after(100, self._poll_upgrade)
+
 
 def main():
     root = tk.Tk()

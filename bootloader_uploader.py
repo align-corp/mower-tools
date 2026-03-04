@@ -172,64 +172,59 @@ class BootloaderUploader:
         if timeout is None:
             timeout = self.timeout
 
-        old_timeout = self.ser.timeout
-        self.ser.timeout = timeout
+        deadline = time.time() + timeout
 
-        try:
-            # Read sync word
-            sync_bytes = self.ser.read(2)
-            if len(sync_bytes) != 2:
+        # Wait for sync word (device may be busy processing, e.g. erasing flash)
+        sync_bytes = b''
+        while len(sync_bytes) < 2 and time.time() < deadline:
+            chunk = self.ser.read(2 - len(sync_bytes))
+            if chunk:
+                sync_bytes += chunk
+        if len(sync_bytes) != 2:
+            return None, None, None
+
+        sync = struct.unpack('>H', sync_bytes)[0]
+        if sync != SYNC_WORD:
+            print(f"Warning: Invalid sync word: 0x{sync:04X}")
+            return None, None, None
+
+        # Response started - remaining reads use default serial timeout
+        cmd_byte = self.ser.read(1)
+        if len(cmd_byte) != 1:
+            return None, None, None
+        cmd = cmd_byte[0]
+
+        status_byte = self.ser.read(1)
+        if len(status_byte) != 1:
+            return None, None, None
+        status = status_byte[0]
+
+        len_bytes = self.ser.read(2)
+        if len(len_bytes) != 2:
+            return None, None, None
+        data_len = struct.unpack('<H', len_bytes)[0]
+
+        data = b''
+        if data_len > 0:
+            data = self.ser.read(data_len)
+            if len(data) != data_len:
                 return None, None, None
 
-            sync = struct.unpack('>H', sync_bytes)[0]
-            if sync != SYNC_WORD:
-                print(f"Warning: Invalid sync word: 0x{sync:04X}")
-                return None, None, None
+        crc_bytes = self.ser.read(2)
+        if len(crc_bytes) != 2:
+            return None, None, None
+        received_crc = struct.unpack('<H', crc_bytes)[0]
 
-            # Read command
-            cmd_byte = self.ser.read(1)
-            if len(cmd_byte) != 1:
-                return None, None, None
-            cmd = cmd_byte[0]
+        crc_data = bytearray([cmd, status])
+        crc_data.extend(len_bytes)
+        crc_data.extend(data)
+        calculated_crc = crc16_ccitt(bytes(crc_data))
 
-            # Read status
-            status_byte = self.ser.read(1)
-            if len(status_byte) != 1:
-                return None, None, None
-            status = status_byte[0]
+        if received_crc != calculated_crc:
+            print(f"Warning: CRC mismatch (rx=0x{received_crc:04X}, calc=0x{calculated_crc:04X})")
+            return None, None, None
 
-            # Read length
-            len_bytes = self.ser.read(2)
-            if len(len_bytes) != 2:
-                return None, None, None
-            data_len = struct.unpack('<H', len_bytes)[0]
-
-            # Read data
-            data = b''
-            if data_len > 0:
-                data = self.ser.read(data_len)
-                if len(data) != data_len:
-                    return None, None, None
-
-            # Read and verify CRC
-            crc_bytes = self.ser.read(2)
-            if len(crc_bytes) != 2:
-                return None, None, None
-            received_crc = struct.unpack('<H', crc_bytes)[0]
-
-            # Verify CRC
-            crc_data = bytearray([cmd, status])
-            crc_data.extend(len_bytes)
-            crc_data.extend(data)
-            calculated_crc = crc16_ccitt(bytes(crc_data))
-
-            if received_crc != calculated_crc:
-                print(f"Warning: CRC mismatch (rx=0x{received_crc:04X}, calc=0x{calculated_crc:04X})")
-                return None, None, None
-
-            return cmd, status, data
-        finally:
-            self.ser.timeout = old_timeout
+        return cmd, status, data
 
     def send_app_enter_bootloader(self):
         """Send enter bootloader command to running application (different protocol)"""
@@ -329,9 +324,17 @@ class BootloaderUploader:
 
         # Ping bootloader with retry logic
         print("\nChecking bootloader...")
-        if not self.ping():
+        try:
+            bootloader_ready = self.ping()
+        except (serial.SerialException, PermissionError):
+            bootloader_ready = False
+
+        if not bootloader_ready:
             print("Bootloader not responding, requesting app to enter bootloader...")
-            self.send_app_enter_bootloader()
+            try:
+                self.send_app_enter_bootloader()
+            except (serial.SerialException, PermissionError):
+                pass  # Device may already be rebooting
 
             # Retry with timeout
             start_time = time.time()
@@ -352,13 +355,16 @@ class BootloaderUploader:
                     )
                     self.ser.reset_input_buffer()
                     self.ser.reset_output_buffer()
-                except serial.SerialException:
+                except (serial.SerialException, PermissionError):
                     print(".", end='', flush=True)
                     continue
 
-                if self.ping():
-                    print("\nBootloader ready!")
-                    break
+                try:
+                    if self.ping():
+                        print("\nBootloader ready!")
+                        break
+                except (serial.SerialException, PermissionError):
+                    pass
                 print(".", end='', flush=True)
             else:
                 print("\nError: Bootloader not responding after 10 seconds")

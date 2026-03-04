@@ -6,7 +6,7 @@ import serial.tools.list_ports
 import usb_protocol as u
 import bootloader_uploader as bl
 
-VERSION = 0.1
+VERSION = 0.2
 
 class _QueueWriter:
     """File-like object that captures print output into a queue for GUI display."""

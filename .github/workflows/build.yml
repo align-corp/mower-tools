@@ -37,11 +37,25 @@ jobs:
           esac
           pyinstaller gui.py --onedir --windowed --noconfirm --name "Mower Tools" --icon="$ICON"
 
+      # zip must be created in this stage with different OS, to preserve executable permissions
+      - name: Zip artifact (macOS)
+        if: startsWith(matrix.os, 'macos')
+        run: cd dist && ditto -c -k --sequesterRsrc --keepParent "Mower Tools.app" "Mower-tools-${{ matrix.os }}.zip"
+
+      - name: Zip artifact (Linux)
+        if: startsWith(matrix.os, 'ubuntu')
+        run: cd dist && zip -r "Mower-tools-${{ matrix.os }}.zip" "Mower Tools"
+
+      - name: Zip artifact (Windows)
+        if: startsWith(matrix.os, 'windows')
+        shell: pwsh
+        run: Compress-Archive -Path "dist/Mower Tools" -DestinationPath "dist/Mower-tools-${{ matrix.os }}.zip"
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: Mower-tools-${{ matrix.os }}
-          path: dist/
+          path: dist/*.zip
 
   release:
     permissions:
@@ -54,21 +68,12 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: build
-      
+
       - name: Create release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Zip each artifact
-          cd build
-          for dir in */; do
-            dirname="${dir%/}"
-            zip -r "${dirname}.zip" "$dirname"
-          done
-          cd ..
-          
-          # Create release and upload zips
           gh release create ${{ github.ref_name }} \
             --title "Release ${{ github.ref_name }}" \
             --notes "Automated release for ${{ github.ref_name }}" \
-            build/*.zip
+            build/**/*.zip

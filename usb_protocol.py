@@ -31,7 +31,7 @@ PARAM_NAMES_V1 = {
     0: "Time engine [min]",
     1: "Time mower [min]",
     2: "Engine choke CH",
-    3: "Engine setting bitmask",
+    3: "Engine RPM multiplier",
     4: "Blade encoder min",
     5: "Blade encoder max",
     6: "Blade encoder now",

@@ -299,6 +299,13 @@ class BootloaderUploader:
         cmd, status, _ = self.receive_response(timeout=2.0)
         return cmd == CMD_START_APP and status == STATUS_OK
 
+    def reset_mcu(self) -> bool:
+        """Reset MCU (device will reboot and boot to app if valid)"""
+        self.send_packet(CMD_RESET)
+        # Device resets immediately; response may or may not arrive
+        cmd, status, _ = self.receive_response(timeout=2.0)
+        return cmd is None or (cmd == CMD_RESET and status == STATUS_OK)
+
     def upload_firmware(self, firmware_path: str, app_version: tuple = (0, 1)) -> bool:
         """Upload firmware file to bootloader"""
 
@@ -462,8 +469,8 @@ def main():
     parser.add_argument('firmware', help='Firmware binary file (.bin)')
     parser.add_argument('--version', '-v', default='0.1',
                         help='Application version (e.g., 1.2)')
-    parser.add_argument('--start', '-s', action='store_true',
-                        help='Start application after upload')
+    parser.add_argument('--no-reset', action='store_true',
+                        help='Do not reset MCU after upload')
     parser.add_argument('--baudrate', '-b', type=int, default=115200,
                         help='Serial baudrate (default: 115200)')
 
@@ -489,15 +496,13 @@ def main():
         if not uploader.upload_firmware(args.firmware, version):
             return 1
 
-        # Start application if requested
-        if args.start:
-            print("\nStarting application...")
-            if uploader.start_app():
-                print("Application started!")
-            else:
-                print("Warning: Could not start application (might have started anyway)")
+        # Reset MCU to boot into app
+        if not args.no_reset:
+            print("\nResetting MCU...")
+            uploader.reset_mcu()
+            print("Reset sent. Device booting to application.")
         else:
-            print("\nUpload complete! Reset device or use --start to launch application.")
+            print("\nUpload complete! Reset device to launch application.")
 
         return 0
     finally:

@@ -294,7 +294,10 @@ class MowerGUI:
             if not uploader.connect():
                 return
             try:
-                uploader.upload_firmware(fw_path)
+                if uploader.upload_firmware(fw_path):
+                    print("Resetting MCU...")
+                    uploader.reset_mcu()
+                    print("Reset sent. Device booting to application.")
             finally:
                 uploader.disconnect()
         except Exception as e:

@@ -235,12 +235,17 @@ class MowerGUI:
         status_frame = ttk.Frame(main_frame)
         status_frame.grid(row=2, column=0, pady=5)
         self.status_label = ttk.Label(status_frame, style="Title.TLabel")
-        self.status_label.grid(columnspan=2, pady=5)
+        self.status_label.grid(columnspan=4, pady=5)
         self.status = {}
+        # Wrap status entries into two label/value column pairs
+        rows_per_column = (len(u.STATUS_NAMES) + 1) // 2
         for i, name in u.STATUS_NAMES.items():
-            ttk.Label(status_frame, text=name).grid(row=i+1, sticky=tk.W)
+            row = i % rows_per_column + 1
+            col = (i // rows_per_column) * 2
+            ttk.Label(status_frame, text=name).grid(
+                row=row, column=col, sticky=tk.W, padx=(10, 0) if col else 0)
             self.status[i] = ttk.Entry(status_frame, width=10, state="readonly")
-            self.status[i].grid(row=i+1, column=1, padx=5)
+            self.status[i].grid(row=row, column=col+1, padx=5)
 
         # Firmware upgrade frame
         fw_frame = ttk.Frame(main_frame)
@@ -387,7 +392,7 @@ class MowerGUI:
         for s in u.STATUS_NAMES:
             self.status[s].config(state="normal")
             self.status[s].delete(0, tk.END)
-            self.status[s].insert(0, state.get(s))
+            self.status[s].insert(0, state.get(s, ""))
             self.status[s].config(state="readonly")
         return True
 

@@ -70,7 +70,21 @@ STATUS_NAMES = {
     1: "RPM",
     2: "Engine ON",
     3: "Blade desired position",
-    4: "Blade actual position"
+    4: "Blade actual position",
+    5: "RC protocol",
+    6: "RC failsafe",
+}
+STATUS_RC_CH_FIRST = 7
+RC_CHANNELS = 16        # channels in the state response
+RC_CHANNELS_SHOWN = 10  # channels displayed by the tools
+for _ch in range(RC_CHANNELS_SHOWN):
+    STATUS_NAMES[STATUS_RC_CH_FIRST + _ch] = f"RC CH{_ch + 1}"
+
+# RC protocol IDs reported in the state response
+RC_PROTOCOL_NAMES = {
+    0: "detecting",
+    1: "ABUS",
+    2: "CRSF",
 }
 
 # PARAM_BLADE_BITMASK bit definitions
@@ -255,10 +269,12 @@ class UsbProtocolClient:
 
     def get_state(self):
         """
-        Get device state (voltage, RPM, engine status)
+        Get device state (voltage, RPM, engine status, RC input)
 
         Returns:
-            Dictionary with keys: 'voltage', 'rpm', 'engine_on'
+            Dictionary keyed like STATUS_NAMES. RC entries (protocol,
+            failsafe, channels) are only present when the firmware
+            reports them (43 byte state response).
         """
         # Send request
         self._send_packet(USB_CMD_GET_STATE, [])
@@ -272,25 +288,37 @@ class UsbProtocolClient:
             error_msg = ERROR_NAMES.get(error_code, f"Unknown error {error_code}")
             raise RuntimeError(f"Error: {error_msg}")
 
-        # Validate response
-        if cmd != USB_CMD_RESPONSE_OK or len(payload) != 9:
+        # Validate response: 9 bytes on older firmware, 43 bytes with RC status
+        if cmd != USB_CMD_RESPONSE_OK or len(payload) not in (9, 11 + RC_CHANNELS * 2):
             raise RuntimeError(f"Invalid response: cmd={cmd:02X}, len={len(payload)}")
 
         # Parse response: [VOLT_L] [VOLT_H] [RPM_L] [RPM_H] [ENGINE_ON]
-        shorts = struct.unpack('<HHBhh', payload) # H=unsigned short, h=signed short, B=unsigned byte
+        shorts = struct.unpack('<HHBhh', payload[:9]) # H=unsigned short, h=signed short, B=unsigned byte
         voltage_mv = shorts[0]
         rpm = shorts[1]
         engine_on = shorts[2]
         blade_des_pos = shorts[3]
         blade_pos = shorts[4]
 
-        return {
+        state = {
             0: voltage_mv / 1000.0,  # Convert to volts
             1: rpm,
             2: engine_on,
             3: blade_des_pos,
             4: blade_pos
         }
+
+        # Parse RC status: [RC_PROTO] [RC_FAILSAFE] [CH1_L] [CH1_H] ... [CH16_L] [CH16_H]
+        if len(payload) > 9:
+            protocol = payload[9]
+            failsafe = payload[10]
+            channels = struct.unpack(f'<{RC_CHANNELS}H', payload[11:11 + RC_CHANNELS * 2])
+            state[5] = RC_PROTOCOL_NAMES.get(protocol, f"unknown ({protocol})")
+            state[6] = "YES" if failsafe else "NO"
+            for ch, pwm in enumerate(channels[:RC_CHANNELS_SHOWN]):
+                state[STATUS_RC_CH_FIRST + ch] = pwm
+
+        return state
 
     def reboot(self):
         """

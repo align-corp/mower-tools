@@ -12,7 +12,7 @@ Usage:
     python cli.py get [param_id]          # Get parameter value (all if no ID)
     python cli.py set <param_id> <value>  # Set parameter value
     python cli.py version                 # Get firmware version
-    python cli.py state                   # Get device state (voltage, RPM, engine)
+    python cli.py state                   # Get device state (voltage, RPM, engine, RC channels)
     python cli.py reboot                  # Reboot device
 
 Options:
@@ -83,8 +83,10 @@ def main():
 
         elif command == 'state':
             state = client.get_state()
+            # RC entries are missing when the firmware does not report them
             for i, s in u.STATUS_NAMES.items():
-                print(f"{s}: {state[i]}")
+                if i in state:
+                    print(f"{s}: {state[i]}")
 
         elif command == 'reboot':
             client.reboot()

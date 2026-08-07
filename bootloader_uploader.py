@@ -8,7 +8,7 @@ Usage:
     python bootloader_uploader.py <port> <firmware.bin>
 
 Example:
-    python bootloader_uploader.py /dev/tty.usbmodem14101 .pio/build/align/firmware.bin
+    python bootloader_uploader.py /dev/tty.usbmodem14101 build/firmware.bin
     python bootloader_uploader.py COM3 firmware.bin
 """
 
@@ -33,12 +33,13 @@ FLASH_PAGE_SIZE = 2048
 
 # Application memory layout
 APPLICATION_START = 0x08008000
-APPLICATION_MAX_SIZE = 0x00037800  # 222KB (BANK1 only)
-METADATA_ADDR = 0x0803F800
+APPLICATION_MAX_SIZE = 0x00037800        # 222KB application region (BANK1 only)
+METADATA_OFFSET = APPLICATION_MAX_SIZE   # metadata page lands at 0x0803F800
+METADATA_SIZE = 64
+IMAGE_MAX_SIZE = APPLICATION_MAX_SIZE + FLASH_PAGE_SIZE
 
-# Metadata magic
+# Metadata magic. Used to recognise and read a descriptor
 METADATA_MAGIC = 0x4D4F5745  # "MOWE"
-METADATA_VERSION = 1
 
 # Application protocol constants (for entering bootloader from running app)
 APP_PROTO_HEADER = 0xA1
@@ -100,10 +101,39 @@ def crc16_ccitt(data: bytes) -> int:
     return crc
 
 
-def crc32(data: bytes) -> int:
-    """Calculate CRC-32 (standard, same as STM32 hardware CRC with config)"""
-    import binascii
-    return binascii.crc32(data) & 0xFFFFFFFF
+# ============================================================
+# Metadata
+# ============================================================
+
+def decode_metadata(blob: bytes) -> dict:
+    """Decode the 64-byte descriptor produced by the firmware build.
+
+    Mirrors app_metadata_t in the firmware's include/app_metadata.h. Read-only:
+    this is for showing what an image or a device contains. Authoring the
+    descriptor is the build's job, so that what gets flashed can be traced back
+    to a commit no matter which tool wrote it.
+    """
+    magic, meta_version, major, minor, size, crc, timestamp = struct.unpack_from(
+        '<7I', blob, 0)
+
+    return {
+        'magic': magic,
+        'metadata_version': meta_version,
+        'version': f"{major}.{minor}",
+        'size': size,
+        'crc32': crc,
+        'timestamp': timestamp,
+        # 8 ASCII hex chars, not NUL-terminated.
+        'git_hash': blob[28:36].decode('ascii', errors='replace'),
+    }
+
+
+def print_metadata(meta: dict, prefix: str = ''):
+    """Print a decoded descriptor as two aligned lines"""
+    when = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(meta['timestamp']))
+    print(f"{prefix}Version: {meta['version']}  "
+          f"Commit: {meta['git_hash']}  Built: {when}")
+    print(f"{prefix}Size: {meta['size']} bytes  CRC32: 0x{meta['crc32']:08X}")
 
 
 # ============================================================
@@ -248,6 +278,18 @@ class BootloaderUploader:
         cmd, status, _ = self.receive_response(timeout=2.0)
         return cmd == CMD_PING and status == STATUS_OK
 
+    def get_app_info(self) -> dict:
+        """Read the descriptor of the application currently in flash.
+
+        Returns None if the bootloader reports no valid application.
+        """
+        self.send_packet(CMD_GET_APP_INFO)
+        cmd, status, data = self.receive_response()
+        if (cmd != CMD_GET_APP_INFO or status != STATUS_OK
+                or len(data) < METADATA_SIZE):
+            return None
+        return decode_metadata(data)
+
     def get_version(self) -> tuple:
         """Get bootloader version. Returns (major, minor) or None"""
         self.send_packet(CMD_GET_VERSION)
@@ -306,8 +348,13 @@ class BootloaderUploader:
         cmd, status, _ = self.receive_response(timeout=2.0)
         return cmd is None or (cmd == CMD_RESET and status == STATUS_OK)
 
-    def upload_firmware(self, firmware_path: str, app_version: tuple = (0, 1)) -> bool:
-        """Upload firmware file to bootloader"""
+    def upload_firmware(self, firmware_path: str) -> bool:
+        """Upload a firmware image to the bootloader.
+
+        The image is written verbatim. Everything the bootloader needs to
+        validate it — size, CRC, version, provenance — is already inside the
+        image, put there by the firmware build.
+        """
 
         # Read firmware file
         path = Path(firmware_path)
@@ -315,19 +362,15 @@ class BootloaderUploader:
             print(f"Error: File not found: {firmware_path}")
             return False
 
-        firmware_data = path.read_bytes()
-        firmware_size = len(firmware_data)
+        image = path.read_bytes()
 
         print(f"Firmware: {firmware_path}")
-        print(f"Size: {firmware_size} bytes ({firmware_size / 1024:.1f} KB)")
+        print(f"Size: {len(image)} bytes ({len(image) / 1024:.1f} KB)")
 
-        if firmware_size > APPLICATION_MAX_SIZE:
-            print(f"Error: Firmware too large (max {APPLICATION_MAX_SIZE} bytes)")
+        meta = self._read_image_metadata(image)
+        if meta is None:
             return False
-
-        # Calculate CRC32 of firmware
-        firmware_crc = crc32(firmware_data)
-        print(f"CRC32: 0x{firmware_crc:08X}")
+        print_metadata(meta)
 
         # Ping bootloader with retry logic
         print("\nChecking bootloader...")
@@ -394,42 +437,45 @@ class BootloaderUploader:
             return False
         print("Erase complete")
 
-        # Pad firmware to page boundary
-        padded_size = ((firmware_size + FLASH_PAGE_SIZE - 1) // FLASH_PAGE_SIZE) * FLASH_PAGE_SIZE
-        padded_data = firmware_data + (b'\xFF' * (padded_size - firmware_size))
+        # Pad the tail of the image out to a whole page. Only the last page is
+        # ever short: the metadata is 64 bytes at the start of it.
+        padded = image + (b'\xFF' * (-len(image) % FLASH_PAGE_SIZE))
+        num_pages = len(padded) // FLASH_PAGE_SIZE
 
-        # Write firmware pages
-        num_pages = padded_size // FLASH_PAGE_SIZE
-        print(f"\nWriting {num_pages} pages...")
+        # Most of the image is the gap between the application and the metadata
+        # page, filled with 0xFF by the build. Those pages already read 0xFF
+        # after the erase above, so skipping them is a no-op that keeps upload
+        # time proportional to the firmware rather than to the 224 KB image.
+        blank_page = b'\xFF' * FLASH_PAGE_SIZE
+        pages = [i for i in range(num_pages)
+                 if padded[i * FLASH_PAGE_SIZE:(i + 1) * FLASH_PAGE_SIZE] != blank_page]
 
-        for i in range(num_pages):
+        skipped = num_pages - len(pages)
+        print(f"\nWriting {len(pages)} pages ({skipped} blank pages skipped)...")
+
+        # Ascending order matters: the metadata page is the last page of the
+        # image, and it has to be written last. It is what the bootloader checks
+        # to decide the application is complete, so an upload that dies partway
+        # must leave it erased and the device refusing to boot a half-written
+        # application.
+        for count, i in enumerate(pages, start=1):
             address = APPLICATION_START + (i * FLASH_PAGE_SIZE)
-            page_data = padded_data[i * FLASH_PAGE_SIZE:(i + 1) * FLASH_PAGE_SIZE]
+            page_data = padded[i * FLASH_PAGE_SIZE:(i + 1) * FLASH_PAGE_SIZE]
 
             if not self.write_page(address, page_data):
-                print(f"\nError: Failed to write page {i + 1}/{num_pages}")
+                print(f"\nError: Failed to write page {count}/{len(pages)} "
+                      f"at 0x{address:08X}")
                 return False
 
             # Progress bar
-            progress = (i + 1) / num_pages
+            progress = count / len(pages)
             bar_width = 40
             filled = int(bar_width * progress)
             bar = '=' * filled + '-' * (bar_width - filled)
-            print(f"\r[{bar}] {progress * 100:.0f}% ({i + 1}/{num_pages})", end='', flush=True)
+            print(f"\r[{bar}] {progress * 100:.0f}% ({count}/{len(pages)})",
+                  end='', flush=True)
 
         print("\nFirmware written successfully!")
-
-        # Write metadata
-        print("\nWriting metadata...")
-        metadata = self._create_metadata(firmware_size, firmware_crc, app_version)
-
-        # Pad metadata to page size
-        metadata_padded = metadata + (b'\xFF' * (FLASH_PAGE_SIZE - len(metadata)))
-
-        if not self.write_page(METADATA_ADDR, metadata_padded):
-            print("Error: Failed to write metadata")
-            return False
-        print("Metadata written")
 
         # Verify
         print("\nVerifying CRC...")
@@ -440,21 +486,39 @@ class BootloaderUploader:
 
         return True
 
-    def _create_metadata(self, app_size: int, app_crc: int, version: tuple) -> bytes:
-        """Create metadata structure"""
-        # AppMetadata structure (64 bytes)
-        metadata = struct.pack('<I', METADATA_MAGIC)       # magic
-        metadata += struct.pack('<I', METADATA_VERSION)    # metadata_version
-        metadata += struct.pack('<I', version[0])          # app_version_major
-        metadata += struct.pack('<I', version[1])          # app_version_minor
-        metadata += struct.pack('<I', app_size)            # app_size
-        metadata += struct.pack('<I', app_crc)             # app_crc32
-        metadata += struct.pack('<I', int(time.time()))    # build_timestamp
-        metadata += b'\x00' * 8                            # git_hash (placeholder)
-        metadata += b'\x00' * 28                           # reserved
+    def _read_image_metadata(self, image: bytes) -> dict:
+        """Validate the image carries a metadata page, and return it decoded.
 
-        assert len(metadata) == 64, f"Metadata size mismatch: {len(metadata)}"
-        return metadata
+        Rejecting the image here rather than after the erase matters: a build
+        without the metadata page would flash cleanly and then fail to boot,
+        leaving the device in the bootloader with no application.
+        """
+        if len(image) > IMAGE_MAX_SIZE:
+            print(f"Error: Image too large: {len(image)} bytes "
+                  f"(max {IMAGE_MAX_SIZE})")
+            return None
+
+        if len(image) < METADATA_OFFSET + METADATA_SIZE:
+            print(f"Error: Image is {len(image)} bytes, too short to contain a "
+                  f"metadata page at offset 0x{METADATA_OFFSET:X}.")
+            print("       Expected a firmware.bin from a build that emits the "
+                  ".app_metadata section.")
+            return None
+
+        meta = decode_metadata(image[METADATA_OFFSET:])
+        if meta['magic'] != METADATA_MAGIC:
+            print(f"Error: No metadata found at offset 0x{METADATA_OFFSET:X} "
+                  f"(magic 0x{meta['magic']:08X}).")
+            print("       This image was not produced by a build that embeds "
+                  "application metadata.")
+            return None
+
+        if meta['size'] == 0 or meta['size'] > APPLICATION_MAX_SIZE:
+            print(f"Error: Metadata reports an implausible size "
+                  f"({meta['size']} bytes); the image looks unpatched.")
+            return None
+
+        return meta
 
 
 # ============================================================
@@ -467,23 +531,12 @@ def main():
     )
     parser.add_argument('port', help='Serial port (e.g., /dev/tty.usbmodem14101, COM3)')
     parser.add_argument('firmware', help='Firmware binary file (.bin)')
-    parser.add_argument('--version', '-v', default='0.1',
-                        help='Application version (e.g., 1.2)')
     parser.add_argument('--no-reset', action='store_true',
                         help='Do not reset MCU after upload')
     parser.add_argument('--baudrate', '-b', type=int, default=115200,
                         help='Serial baudrate (default: 115200)')
 
     args = parser.parse_args()
-
-    # Parse version
-    try:
-        version_parts = args.version.split('.')
-        version = (int(version_parts[0]),
-                   int(version_parts[1]) if len(version_parts) > 1 else 0)
-    except ValueError:
-        print(f"Error: Invalid version format: {args.version}")
-        return 1
 
     # Create uploader
     uploader = BootloaderUploader(args.port, args.baudrate)
@@ -493,8 +546,15 @@ def main():
 
     try:
         # Upload firmware
-        if not uploader.upload_firmware(args.firmware, version):
+        if not uploader.upload_firmware(args.firmware):
             return 1
+
+        # Report what the bootloader now sees, read back from the device
+        # rather than from the file we just sent.
+        info = uploader.get_app_info()
+        if info:
+            print("\nApplication on device:")
+            print_metadata(info, prefix='  ')
 
         # Reset MCU to boot into app
         if not args.no_reset:

@@ -8,7 +8,7 @@ import os
 import usb_protocol as u
 import bootloader_uploader as bl
 
-VERSION = 0.4
+VERSION = 1.0
 
 TRANSLATIONS = {
     "en": {

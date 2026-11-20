@@ -4,5 +4,5 @@ build/
 dist/
 gui.spec
 Mower Tools.spec
-.python-version
 
+.venv/

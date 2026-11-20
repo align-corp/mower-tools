@@ -34,7 +34,7 @@ jobs:
             windows-*) ICON="icon/icon.ico" ;;
             *)         ICON="icon/icon.png" ;;
           esac
-          uv run pyinstaller gui.py --onedir --windowed --noconfirm --name "Mower Tools" --icon="$ICON"
+          uv run pyinstaller gui.py --onedir --windowed --noconfirm --name "Mower Tools" --add-data "pyproject.toml:." --icon="$ICON"
 
       # zip must be created in this stage with different OS, to preserve executable permissions
       - name: Zip artifact (macOS)

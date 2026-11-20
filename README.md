@@ -45,5 +45,5 @@ USB_PORT=/dev/ttyUSB0 uv run cli.py get
 
 ## Generate installer
 ```
-uv run pyinstaller gui.py --onedir --windowed --noconfirm --name "Mower Tools" --icon=icon/icon.icns
+uv run pyinstaller gui.py --onedir --windowed --noconfirm --name "Mower Tools" --add-data "pyproject.toml:." --icon=icon/icon.icns
 ```

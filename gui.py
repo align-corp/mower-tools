@@ -5,10 +5,20 @@ import queue
 import serial.tools.list_ports
 import locale
 import os
+import sys
+import tomllib
 import usb_protocol as u
 import bootloader_uploader as bl
 
-VERSION = 1.0
+
+def _read_version():
+    # PyInstaller unpacks bundled data files into sys._MEIPASS
+    base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+    with open(os.path.join(base, "pyproject.toml"), "rb") as f:
+        return tomllib.load(f)["project"]["version"]
+
+
+VERSION = _read_version()
 
 TRANSLATIONS = {
     "en": {
@@ -463,7 +473,6 @@ class MowerGUI:
         self._poll_upgrade()
 
     def _upgrade_worker(self, port, fw_path):
-        import sys
         old_stdout = sys.stdout
         sys.stdout = _QueueWriter(self._upgrade_queue)
         try:
